@@ -34,7 +34,7 @@
 # The status "FAILURE/BAD" is passed to other scripts and informs them
 # about failure.
 #
-# PP-Script version: 1.0.
+# PP-Script version: 1.1.
 #
 # NOTE: For best results select this script in both options: QueueScript
 # and PostScript, preferably as the first script. This ensures earlier
@@ -96,7 +96,7 @@ def start_check():
 	# If nzb is already failed, don't do any further detection
 	if os.environ.get('NZBPP_TOTALSTATUS') == 'FAILURE':
 		sys.exit(POSTPROCESS_NONE)
-
+	
 # Check if media files present in the list of files
 def contains_media(list):
 	mediaExtensions = [ '.mkv', '.avi', '.divx', '.xvid', '.mov', '.wmv', '.mp4', '.mpg', '.mpeg', '.vob', '.iso', '.m4v' ]
@@ -123,17 +123,61 @@ def contains_executable(list):
 			continue
 	return False
 
+# Finds untested files, comparing all files and processed files in tmp_file
+def get_latest_file(dir):
+	try:
+		with open(tmp_file_name) as tmp_file:
+			tested = tmp_file.read().splitlines()
+			files = os.listdir(dir)
+			return list(set(files)-set(tested))
+	except:
+		# tmp_file doesn't exist, all files need testing
+		temp_folder = os.path.dirname(tmp_file_name)
+		if not os.path.exists(temp_folder):
+			os.makedirs(temp_folder)
+			print('[DETAIL] Created folder ' + temp_folder)
+		with open(tmp_file_name, "w") as tmp_file:
+			tmp_file.write('')
+			print('[DETAIL] Created temp file ' + tmp_file_name)
+		return os.listdir(dir)
+
+# Saves tested files so to not test again
+def save_tested(data):
+	with open(tmp_file_name, "a") as tmp_file:
+		tmp_file.write(data)
+		
 # List contents of rar-files (without unpacking).
 # That's how we detect fakes during download, when the download is not completed yet.
 def list_all_rars(dir):
-	command = [os.environ['NZBOP_UNRARCMD'], "vb", "%s" % (os.path.join(dir, '*.*'))]
+	files = get_latest_file(dir)
+	tested = ''
+	out = ''
+	for file in files:
+		# avoid .tmp files as corrupt
+		if not "tmp" in file:
+			try:
+				command = [os.environ['NZBOP_UNRARCMD'], "vb", dir + '/' + file]
+				proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+				out_tmp, err = proc.communicate()
+				out += out_tmp
+				result = proc.returncode
+				# print out_tmp	#uncomment this to see unrar calls when queue script triggered 
+			except:
+				print('[ERROR] Something went wrong checking %s' % file) 
+		tested += file + '\n'
+	save_tested(tested)
+	return out.splitlines()
+	
+# Remove temp file in PP
+def clean_up():
 	try:
-		proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-		out, err = proc.communicate()
-		result = proc.returncode
-		return out.splitlines()
+		if os.path.isfile(tmp_file_name):
+			os.remove(tmp_file_name)
+			print('[DETAIL] Removing temp file complete')
+		else:
+			print('[DETAIL] No temp file to remove')
 	except:
-		return []
+		print('[ERROR] Removing temp file was unsuccesful.')
 
 # Detect fake nzbs. Returns True if a fake is detected.
 def detect_fake(name, dir):
@@ -228,6 +272,9 @@ def sort_inner_files():
 
 # Script body
 def main():
+	# Globally define directory for storing list of tested files
+	global tmp_file_name
+
 	# Do start up check
 	start_check()
 	
@@ -246,6 +293,14 @@ def main():
 	Category = os.environ[Prefix + 'CATEGORY']
 	Directory = os.environ[Prefix + 'DIRECTORY']
 	NzbName = os.environ[Prefix + 'NZBNAME']
+	
+	# Directory for storing list of tested files
+	tmp_file_name = os.environ.get('NZBOP_TEMPDIR') + '/FakeDetector/' + os.environ.get(Prefix + 'NZBID')
+	
+	# Remove temp file in PP
+	if Prefix == 'NZBPP_':
+		clean_up()
+		sys.exit(POSTPROCESS_SUCCESS)
 	
 	# When nzb is added to queue - reorder inner files for earlier fake detection
 	if os.environ.get('NZBNA_EVENT') == 'NZB_ADDED':
@@ -287,7 +342,7 @@ def main():
 	
 	print('[DETAIL] Detecting completed for %s' % NzbName)
 	sys.stdout.flush()
-
+	
 # Execute main script function
 main()	
 
