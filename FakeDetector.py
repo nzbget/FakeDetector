@@ -4,6 +4,7 @@
 #
 # Copyright (C) 2014 Andrey Prygunkov <hugbug@users.sourceforge.net>
 # Copyright (C) 2014 Clinton Hall <clintonhall@users.sourceforge.net>
+# Copyright (C) 2014 JVM
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -34,23 +35,10 @@
 # The status "FAILURE/BAD" is passed to other scripts and informs them
 # about failure.
 #
-# PP-Script version: 1.1.
-#
-# NOTE: For best results select this script in both options: QueueScript
-# and PostScript, preferably as the first script. This ensures earlier
-# detection.
+# PP-Script version: 1.2.
 #
 # NOTE: This script requires Python to be installed on your system (tested
 # only with Python 2.x; may not work with Python 3.x).
-
-##############################################################################
-### OPTIONS                                                                ###
-
-# Comma separated list of categories to detect fakes for.
-#
-# If the list is empty all downloads (from all categories) are checked.
-# Wildcards (* and ?) are supported, for example: *tv*,*movie*.
-#Categories=*tv*,*movie*
 
 ### NZBGET QUEUE/POST-PROCESSING SCRIPT                                    ###
 ##############################################################################
@@ -59,7 +47,6 @@
 import os
 import sys
 import subprocess
-import fnmatch
 import re
 from xmlrpclib import ServerProxy
 
@@ -70,6 +57,7 @@ POSTPROCESS_NONE=95
 POSTPROCESS_ERROR=94
 
 nzbget = None
+verbose = False
 
 # Start up checks
 def start_check():
@@ -157,11 +145,14 @@ def list_all_rars(dir):
 		if not "tmp" in file:
 			try:
 				command = [os.environ['NZBOP_UNRARCMD'], "vb", dir + '/' + file]
+				if verbose:
+					print('command: %s' % command)
 				proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 				out_tmp, err = proc.communicate()
 				out += out_tmp
 				result = proc.returncode
-				# print out_tmp	#uncomment this to see unrar calls when queue script triggered 
+				if verbose:
+					print(out_tmp)
 			except:
 				print('[ERROR] Something went wrong checking %s' % file) 
 		tested += file + '\n'
@@ -204,20 +195,8 @@ def detect_fake(name, dir):
 		print('[WARNING] Download has media files and executables')
 	return fake
 
-
-# If the option "CATEGORIES" is set - check if the nzb has a category from the list
-def check_category(category):
-	Categories = os.environ.get('NZBPO_CATEGORIES', '').split(',')
-	if Categories == [] or Categories == ['']:
-		return True
-	
-	for m_category in Categories:
-		if m_category <> '' and fnmatch.fnmatch(category, m_category):
-			return True
-	return False
-
 # Establish connection to NZBGet via RPC-API
-def connectToNzbGet():
+def connect_to_nzbget():
 	global nzbget
 	
 	# First we need to know connection info: host, port and password of NZBGet server.
@@ -240,7 +219,7 @@ def connectToNzbGet():
 # Reorder inner files for earlier fake detection
 def sort_inner_files():
 	# Setup connection to NZBGet RPC-server
-	connectToNzbGet()
+	connect_to_nzbget()
 
 	nzb_id = int(os.environ.get('NZBNA_NZBID'))
 
@@ -297,23 +276,21 @@ def main():
 	# Directory for storing list of tested files
 	tmp_file_name = os.environ.get('NZBOP_TEMPDIR') + '/FakeDetector/' + os.environ.get(Prefix + 'NZBID')
 	
-	# Remove temp file in PP
-	if Prefix == 'NZBPP_':
-		clean_up()
-		sys.exit(POSTPROCESS_SUCCESS)
-	
-	# When nzb is added to queue - reorder inner files for earlier fake detection
-	if os.environ.get('NZBNA_EVENT') == 'NZB_ADDED':
+	# When nzb is added to queue - reorder inner files for earlier fake detection.
+	# Also it is possible that nzb was added with a category which doesn't have 
+	# FakeDetector listed in the PostScript. In this case FakeDetector was not called
+	# when adding nzb to queue but it is being called now and we can reorder
+	# files now.
+	if os.environ.get('NZBNA_EVENT') == 'NZB_ADDED' or \
+			(os.environ.get('NZBNA_EVENT') == 'FILE_DOWNLOADED' and \
+			os.environ.get('NZBPR_FAKEDETECTOR_SORTED') <> 'yes'):
 		print('[INFO] Sorting inner files for earlier fake detection for %s' % NzbName)
 		sys.stdout.flush()
 		sort_inner_files()
-		sys.exit(POSTPROCESS_NONE)
-	
-	# Does nzb has a category from the list of categories to check?
-	if not check_category(Category):
-		print('[DETAIL] Skipping fake detection for %s (not matching category)' % NzbName)
-		sys.exit(POSTPROCESS_NONE)
-	
+		print('[NZB] NZBPR_FAKEDETECTOR_SORTED=yes')
+		if os.environ.get('NZBNA_EVENT') == 'NZB_ADDED':
+			sys.exit(POSTPROCESS_NONE)
+		
 	print('[DETAIL] Detecting fake for %s' % NzbName)
 	sys.stdout.flush()
 	
@@ -339,6 +316,10 @@ def main():
 		# at least during debugging of fake detector we do that all the time.
 		if os.environ.get('NZBPR_PPSTATUS_FAKE') == 'yes':
 			print('[NZB] NZBPR_PPSTATUS_FAKE=')
+
+	# Remove temp file in PP
+	if Prefix == 'NZBPP_':
+		clean_up()
 	
 	print('[DETAIL] Detecting completed for %s' % NzbName)
 	sys.stdout.flush()
