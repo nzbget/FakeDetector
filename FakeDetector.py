@@ -4,7 +4,7 @@
 #
 # Copyright (C) 2014 Andrey Prygunkov <hugbug@users.sourceforge.net>
 # Copyright (C) 2014 Clinton Hall <clintonhall@users.sourceforge.net>
-# Copyright (C) 2014 JVM
+# Copyright (C) 2014 JVM <jvmed@users.sourceforge.net>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -31,11 +31,14 @@
 # downloaded files are deleted from disk. If duplicate handling is active
 # (option "DupeCheck") then another duplicate is chosen for download
 # if available.
-# 
+#
 # The status "FAILURE/BAD" is passed to other scripts and informs them
 # about failure.
 #
-# PP-Script version: 1.2.
+# PP-Script version: 1.3.
+#
+# For more info and updates please visit forum topic at
+# http://nzbget.net/forum/viewtopic.php?f=8&t=1394.
 #
 # NOTE: This script requires Python to be installed on your system (tested
 # only with Python 2.x; may not work with Python 3.x).
@@ -48,6 +51,8 @@ import os
 import sys
 import subprocess
 import re
+import urllib2
+import base64
 from xmlrpclib import ServerProxy
 
 # Exit codes used by NZBGet for post-processing scripts.
@@ -56,7 +61,6 @@ POSTPROCESS_SUCCESS=93
 POSTPROCESS_NONE=95
 POSTPROCESS_ERROR=94
 
-nzbget = None
 verbose = False
 
 # Start up checks
@@ -74,6 +78,10 @@ def start_check():
 	
 	# If nzb was already marked as bad don't do any further detection
 	if os.environ.get('NZBPP_STATUS') == 'FAILURE/BAD':
+		if os.environ.get('NZBPR_PPSTATUS_FAKE') == 'yes':
+			# Print the message again during post-processing to add it into the post-processing log
+			# (which is then can be used by notification scripts such as EMail.py)
+			print('[WARNING] Download has media files and executables')
 		sys.exit(POSTPROCESS_SUCCESS)
 	
 	# If called via "Post-process again" from history details dialog the download may not exist anymore
@@ -195,37 +203,52 @@ def detect_fake(name, dir):
 		print('[WARNING] Download has media files and executables')
 	return fake
 
-# Establish connection to NZBGet via RPC-API
-def connect_to_nzbget():
-	global nzbget
-	
+# Reorder inner files for earlier fake detection
+def sort_inner_files():
+	nzb_id = int(os.environ.get('NZBNA_NZBID'))
+
+	# Establish connection to NZBGet via RPC-API
+
 	# First we need to know connection info: host, port and password of NZBGet server.
-	# NZBGet passes all configuration options to post-processing script as
-	# environment variables.
+	# NZBGet passes all configuration options to scripts as environment variables.
 	host = os.environ['NZBOP_CONTROLIP']
+	if host == '0.0.0.0': host = '127.0.0.1'
 	port = os.environ['NZBOP_CONTROLPORT']
 	username = os.environ['NZBOP_CONTROLUSERNAME']
 	password = os.environ['NZBOP_CONTROLPASSWORD']
 	
-	if host == '0.0.0.0': host = '127.0.0.1'
-	
 	# Build an URL for XML-RPC requests
 	# TODO: encode username and password in URL-format
-	rpcUrl = 'http://%s:%s@%s:%s/xmlrpc' % (username, password, host, port);
+	xmlRpcUrl = 'http://%s:%s@%s:%s/xmlrpc' % (username, password, host, port);
 	
 	# Create remote server object
-	nzbget = ServerProxy(rpcUrl)
+	nzbget = ServerProxy(xmlRpcUrl)
 
-# Reorder inner files for earlier fake detection
-def sort_inner_files():
-	# Setup connection to NZBGet RPC-server
-	connect_to_nzbget()
-
-	nzb_id = int(os.environ.get('NZBNA_NZBID'))
-
-	# Hold the list of inner files belonging to this nzb using RPC-API method "listfiles".
+	# Obtain the list of inner files belonging to this nzb using RPC-API method "listfiles".
 	# For details see http://nzbget.net/RPC_API_reference
-	queued_files = nzbget.listfiles(0, 0, nzb_id)
+
+	# It's very easier to get the list of files from NZBGet using XML-RPC:
+	#	queued_files = nzbget.listfiles(0, 0, nzb_id)
+	
+	# However for large file lists the XML-RPC is very slow in python.
+	# Because we like speed we use direct http access to NZBGet to
+	# obtain the result in JSON-format and then we parse it using low level
+	# string functions. We could use python's json-module, which is
+	# much faster than xmlrpc-module but it's still too slow.
+
+	# Building http-URL to call method "listfiles" passing three parameters: (0, 0, nzb_id)
+	httpUrl = 'http://%s:%s/jsonrpc/listfiles?1=0&2=0&3=%i' % (host, port, nzb_id);
+	request = urllib2.Request(httpUrl)
+
+	base64string = base64.encodestring('%s:%s' % (username, password)).replace('\n', '')
+
+	request.add_header("Authorization", "Basic %s" % base64string)   
+
+	# Load data from NZBGet
+	response = urllib2.urlopen(request)
+	data = response.read()
+	# The "data" is a raw json-string. We could use json.loads(data) to
+	# parse it but json-module is still slow. We parse it on our own.
 
 	# Iterate through the list of files to find the last rar-file.
 	# The last is the one with the highest XX in ".partXX.rar".
@@ -234,20 +257,29 @@ def sort_inner_files():
 	file_num = None
 	file_id = None
 	file_name = None
-	for file in queued_files:
-		match = regex.match(file['Filename'])
-		if (match):
-			cur_num = int(match.group(1))
-			if not file_num or cur_num > file_num:
-				file_num = cur_num
-				file_id = file['ID']
-				file_name = file['Filename']
+	
+	for line in data.splitlines():
+		if line.startswith('"ID" : '):
+			cur_id = int(line[7:len(line)-1])
+		if line.startswith('"Filename" : "'):
+			cur_name = line[14:len(line)-2]
+			match = regex.match(cur_name)
+			if (match):
+				cur_num = int(match.group(1))
+				if not file_num or cur_num > file_num:
+					file_num = cur_num
+					file_id = cur_id
+					file_name = cur_name
 
 	# Move the last rar-file to the top of file list
 	if (file_id):
 		print('[INFO] Moving last rar-file to the top: %s' % file_name)
-		# Using RPC-method "editqueue"
+		# Using RPC-method "editqueue" of XML-RPC-object "nzbget".
+		# we could use direct http access here too but the speed isn't
+		# an issue here and XML-RPC is easier to use.
 		nzbget.editqueue('FileMoveTop', 0, '', [file_id])
+	else:
+		print('[INFO] Skipping sorting since could not find any rar-files')
 
 # Script body
 def main():
