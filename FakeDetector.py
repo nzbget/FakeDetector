@@ -35,7 +35,7 @@
 # The status "FAILURE/BAD" is passed to other scripts and informs them
 # about failure.
 #
-# PP-Script version: 1.4.
+# PP-Script version: 1.5.
 #
 # For more info and updates please visit forum topic at
 # http://nzbget.net/forum/viewtopic.php?f=8&t=1394.
@@ -285,7 +285,7 @@ def sort_inner_files():
 
 # Remove current and any old temp files
 def clean_up():
-	nzb_id = int(os.environ.get('NZBPP_NZBID'))
+	nzb_id = os.environ.get('NZBPP_NZBID')
 	temp_folder = os.environ.get('NZBOP_TEMPDIR') + '/FakeDetector'
 
 	nzbids = []
@@ -302,7 +302,8 @@ def clean_up():
 				nzbids.append(str(cur_id))
 
 	old_temp_files = list(set(files)-set(nzbids))
-	old_temp_files.append(str(nzb_id))
+	if nzb_id in files and nzb_id not in old_temp_files:
+		old_temp_files.append(nzb_id)
 
 	for temp_id in old_temp_files:
 		temp_file = temp_folder + '/' + str(temp_id)
