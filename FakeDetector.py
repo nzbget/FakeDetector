@@ -35,7 +35,7 @@
 # The status "FAILURE/BAD" is passed to other scripts and informs them
 # about failure.
 #
-# PP-Script version: 1.3.
+# PP-Script version: 1.4.
 #
 # For more info and updates please visit forum topic at
 # http://nzbget.net/forum/viewtopic.php?f=8&t=1394.
@@ -61,6 +61,8 @@ POSTPROCESS_SUCCESS=93
 POSTPROCESS_NONE=95
 POSTPROCESS_ERROR=94
 
+mediaExtensions = ['.mkv', '.avi', '.divx', '.xvid', '.mov', '.wmv', '.mp4', '.mpg', '.mpeg', '.vob', '.iso', '.m4v']
+
 verbose = False
 
 # Start up checks
@@ -70,32 +72,34 @@ def start_check():
 		print('*** NZBGet queue script ***')
 		print('This script is supposed to be called from nzbget (14.0 or later).')
 		sys.exit(1)
-	
+
 	# This script processes only certain queue events.
 	# For compatibility with newer NZBGet versions it ignores event types it doesn't know
 	if os.environ.get('NZBNA_EVENT') not in ['NZB_ADDED', 'FILE_DOWNLOADED', 'NZB_DOWNLOADED', None]:
 		sys.exit(0)
-	
+
 	# If nzb was already marked as bad don't do any further detection
 	if os.environ.get('NZBPP_STATUS') == 'FAILURE/BAD':
 		if os.environ.get('NZBPR_PPSTATUS_FAKE') == 'yes':
 			# Print the message again during post-processing to add it into the post-processing log
 			# (which is then can be used by notification scripts such as EMail.py)
 			print('[WARNING] Download has media files and executables')
+		clean_up()
 		sys.exit(POSTPROCESS_SUCCESS)
-	
+
 	# If called via "Post-process again" from history details dialog the download may not exist anymore
 	if 'NZBPP_DIRECTORY' in os.environ and not os.path.exists(os.environ.get('NZBPP_DIRECTORY')):
 		print('Destination directory doesn\'t exist, exiting')
+		clean_up()
 		sys.exit(POSTPROCESS_NONE)
-	
+
 	# If nzb is already failed, don't do any further detection
 	if os.environ.get('NZBPP_TOTALSTATUS') == 'FAILURE':
+		clean_up()
 		sys.exit(POSTPROCESS_NONE)
-	
+
 # Check if media files present in the list of files
 def contains_media(list):
-	mediaExtensions = [ '.mkv', '.avi', '.divx', '.xvid', '.mov', '.wmv', '.mp4', '.mpg', '.mpeg', '.vob', '.iso', '.m4v' ]
 	for item in list:
 		if os.path.splitext(item)[1] in mediaExtensions:
 			return True
@@ -167,17 +171,6 @@ def list_all_rars(dir):
 	save_tested(tested)
 	return out.splitlines()
 	
-# Remove temp file in PP
-def clean_up():
-	try:
-		if os.path.isfile(tmp_file_name):
-			os.remove(tmp_file_name)
-			print('[DETAIL] Removing temp file complete')
-		else:
-			print('[DETAIL] No temp file to remove')
-	except:
-		print('[ERROR] Removing temp file was unsuccesful.')
-
 # Detect fake nzbs. Returns True if a fake is detected.
 def detect_fake(name, dir):
 	# Fake detection:
@@ -203,12 +196,8 @@ def detect_fake(name, dir):
 		print('[WARNING] Download has media files and executables')
 	return fake
 
-# Reorder inner files for earlier fake detection
-def sort_inner_files():
-	nzb_id = int(os.environ.get('NZBNA_NZBID'))
-
-	# Establish connection to NZBGet via RPC-API
-
+# Establish connection to NZBGet via RPC-API
+def connect_to_nzbget():
 	# First we need to know connection info: host, port and password of NZBGet server.
 	# NZBGet passes all configuration options to scripts as environment variables.
 	host = os.environ['NZBOP_CONTROLIP']
@@ -223,32 +212,43 @@ def sort_inner_files():
 	
 	# Create remote server object
 	nzbget = ServerProxy(xmlRpcUrl)
+	return nzbget
 
-	# Obtain the list of inner files belonging to this nzb using RPC-API method "listfiles".
-	# For details see http://nzbget.net/RPC_API_reference
-
-	# It's very easier to get the list of files from NZBGet using XML-RPC:
-	#	queued_files = nzbget.listfiles(0, 0, nzb_id)
+# Connect to NZBGet and call an RPC-API-method without using of python's XML-RPC.
+# XML-RPC is easy to use but it is slow for large amount of data
+def call_nzbget_direct(url_command):
+	# First we need to know connection info: host, port and password of NZBGet server.
+	# NZBGet passes all configuration options to scripts as environment variables.
+	host = os.environ['NZBOP_CONTROLIP']
+	if host == '0.0.0.0': host = '127.0.0.1'
+	port = os.environ['NZBOP_CONTROLPORT']
+	username = os.environ['NZBOP_CONTROLUSERNAME']
+	password = os.environ['NZBOP_CONTROLPASSWORD']
 	
-	# However for large file lists the XML-RPC is very slow in python.
-	# Because we like speed we use direct http access to NZBGet to
-	# obtain the result in JSON-format and then we parse it using low level
-	# string functions. We could use python's json-module, which is
-	# much faster than xmlrpc-module but it's still too slow.
-
-	# Building http-URL to call method "listfiles" passing three parameters: (0, 0, nzb_id)
-	httpUrl = 'http://%s:%s/jsonrpc/listfiles?1=0&2=0&3=%i' % (host, port, nzb_id);
+	# Building http-URL to call the method
+	httpUrl = 'http://%s:%s/jsonrpc/%s' % (host, port, url_command);
 	request = urllib2.Request(httpUrl)
 
 	base64string = base64.encodestring('%s:%s' % (username, password)).replace('\n', '')
-
 	request.add_header("Authorization", "Basic %s" % base64string)   
 
 	# Load data from NZBGet
 	response = urllib2.urlopen(request)
 	data = response.read()
+
+	# "data" is a JSON raw-string
+	return data
+
+# Reorder inner files for earlier fake detection
+def sort_inner_files():
+	nzb_id = int(os.environ.get('NZBNA_NZBID'))
+
+	# Building command-URL to call method "listfiles" passing three parameters: (0, 0, nzb_id)
+	url_command = 'listfiles?1=0&2=0&3=%i' % nzb_id
+	data = call_nzbget_direct(url_command)
+	
 	# The "data" is a raw json-string. We could use json.loads(data) to
-	# parse it but json-module is still slow. We parse it on our own.
+	# parse it but json-module is slow. We parse it on our own.
 
 	# Iterate through the list of files to find the last rar-file.
 	# The last is the one with the highest XX in ".partXX.rar".
@@ -274,12 +274,43 @@ def sort_inner_files():
 	# Move the last rar-file to the top of file list
 	if (file_id):
 		print('[INFO] Moving last rar-file to the top: %s' % file_name)
+		# Create remote server object
+		nzbget = connect_to_nzbget()
 		# Using RPC-method "editqueue" of XML-RPC-object "nzbget".
 		# we could use direct http access here too but the speed isn't
 		# an issue here and XML-RPC is easier to use.
 		nzbget.editqueue('FileMoveTop', 0, '', [file_id])
 	else:
 		print('[INFO] Skipping sorting since could not find any rar-files')
+
+# Remove current and any old temp files
+def clean_up():
+	nzb_id = int(os.environ.get('NZBPP_NZBID'))
+	temp_folder = os.environ.get('NZBOP_TEMPDIR') + '/FakeDetector'
+
+	nzbids = []
+	files = os.listdir(temp_folder)
+
+	if len(files) > 1:
+		# Create the list of nzbs in download queue
+		data = call_nzbget_direct('listgroups?1=0')
+		# The "data" is a raw json-string. We could use json.loads(data) to
+		# parse it but json-module is slow. We parse it on our own.
+		for line in data.splitlines():
+			if line.startswith('"NZBID" : '):
+				cur_id = int(line[10:len(line)-1])
+				nzbids.append(str(cur_id))
+
+	old_temp_files = list(set(files)-set(nzbids))
+	old_temp_files.append(str(nzb_id))
+
+	for temp_id in old_temp_files:
+		temp_file = temp_folder + '/' + str(temp_id)
+		try:
+			print('[DETAIL] Removing temp file ' + temp_file)
+			os.remove(temp_file)
+		except:
+			print('[ERROR] Could not remove temp file ' + temp_file)
 
 # Script body
 def main():
@@ -349,12 +380,12 @@ def main():
 		if os.environ.get('NZBPR_PPSTATUS_FAKE') == 'yes':
 			print('[NZB] NZBPR_PPSTATUS_FAKE=')
 
-	# Remove temp file in PP
-	if Prefix == 'NZBPP_':
-		clean_up()
-	
 	print('[DETAIL] Detecting completed for %s' % NzbName)
 	sys.stdout.flush()
+
+	# Remove temp files in PP
+	if Prefix == 'NZBPP_':
+		clean_up()
 	
 # Execute main script function
 main()	
