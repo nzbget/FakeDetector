@@ -35,7 +35,7 @@
 # The status "FAILURE/BAD" is passed to other scripts and informs them
 # about failure.
 #
-# PP-Script version: 1.5.
+# PP-Script version: 1.6.
 #
 # For more info and updates please visit forum topic at
 # http://nzbget.net/forum/viewtopic.php?f=8&t=1394.
@@ -54,6 +54,7 @@ import re
 import urllib2
 import base64
 from xmlrpclib import ServerProxy
+import shlex
 
 # Exit codes used by NZBGet for post-processing scripts.
 # Queue-scripts don't have any special exit codes.
@@ -146,6 +147,23 @@ def save_tested(data):
 	with open(tmp_file_name, "a") as tmp_file:
 		tmp_file.write(data)
 		
+# Extract path to unrar from NZBGet's global option "UnrarCmd";
+# Since v15 "UnrarCmd" may contain extra parameters passed to unrar;
+# We have to strip these parameters because we need only the path to unrar.
+# Returns path to unrar executable.
+def unrar():
+	exe_name = 'unrar.exe' if os.name == 'nt' else 'unrar'
+	UnrarCmd = os.environ['NZBOP_UNRARCMD']
+	if os.path.isfile(UnrarCmd) and UnrarCmd.lower().endswith(exe_name):
+		return UnrarCmd
+	args = shlex.split(UnrarCmd)
+	for arg in args:
+		if arg.lower().endswith(exe_name):
+			return arg
+	# We were unable to determine the path to unrar;
+	# Let's use the exe name with a hope it's in the search path
+	return exe_name
+
 # List contents of rar-files (without unpacking).
 # That's how we detect fakes during download, when the download is not completed yet.
 def list_all_rars(dir):
@@ -156,7 +174,7 @@ def list_all_rars(dir):
 		# avoid .tmp files as corrupt
 		if not "tmp" in file:
 			try:
-				command = [os.environ['NZBOP_UNRARCMD'], "vb", dir + '/' + file]
+				command = [unrar(), "vb", dir + '/' + file]
 				if verbose:
 					print('command: %s' % command)
 				proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
