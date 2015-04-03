@@ -2,7 +2,7 @@
 #
 # Fake detection script for NZBGet
 #
-# Copyright (C) 2014 Andrey Prygunkov <hugbug@users.sourceforge.net>
+# Copyright (C) 2014-2015 Andrey Prygunkov <hugbug@users.sourceforge.net>
 # Copyright (C) 2014 Clinton Hall <clintonhall@users.sourceforge.net>
 # Copyright (C) 2014 JVM <jvmed@users.sourceforge.net>
 #
@@ -35,7 +35,7 @@
 # The status "FAILURE/BAD" is passed to other scripts and informs them
 # about failure.
 #
-# PP-Script version: 1.6.
+# PP-Script version: 1.7.
 #
 # For more info and updates please visit forum topic at
 # http://nzbget.net/forum/viewtopic.php?f=8&t=1394.
@@ -55,6 +55,7 @@ import urllib2
 import base64
 from xmlrpclib import ServerProxy
 import shlex
+import traceback
 
 # Exit codes used by NZBGet for post-processing scripts.
 # Queue-scripts don't have any special exit codes.
@@ -183,8 +184,10 @@ def list_all_rars(dir):
 				result = proc.returncode
 				if verbose:
 					print(out_tmp)
-			except:
-				print('[ERROR] Something went wrong checking %s' % file) 
+			except Exception as e:
+				print('[ERROR] Failed %s: %s' % (file, e))
+				if verbose:
+					traceback.print_exc()
 		tested += file + '\n'
 	save_tested(tested)
 	return out.splitlines()
@@ -269,9 +272,9 @@ def sort_inner_files():
 	# parse it but json-module is slow. We parse it on our own.
 
 	# Iterate through the list of files to find the last rar-file.
-	# The last is the one with the highest XX in ".partXX.rar".
-	regex = re.compile('.*\.part(\d+)\.rar', re.IGNORECASE)
-	last_rar_file = None
+	# The last is the one with the highest XX in ".partXX.rar" or ".rXX"
+	regex1 = re.compile('.*\.part(\d+)\.rar', re.IGNORECASE)
+	regex2 = re.compile('.*\.r(\d+)', re.IGNORECASE)
 	file_num = None
 	file_id = None
 	file_name = None
@@ -281,7 +284,7 @@ def sort_inner_files():
 			cur_id = int(line[7:len(line)-1])
 		if line.startswith('"Filename" : "'):
 			cur_name = line[14:len(line)-2]
-			match = regex.match(cur_name)
+			match = regex1.match(cur_name) or regex2.match(cur_name)
 			if (match):
 				cur_num = int(match.group(1))
 				if not file_num or cur_num > file_num:
