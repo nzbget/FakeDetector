@@ -368,7 +368,7 @@ def main():
 	# files now.
 	if os.environ.get('NZBNA_EVENT') == 'NZB_ADDED' or \
 			(os.environ.get('NZBNA_EVENT') == 'FILE_DOWNLOADED' and \
-			os.environ.get('NZBPR_FAKEDETECTOR_SORTED') <> 'yes'):
+			os.environ.get('NZBPR_FAKEDETECTOR_SORTED') != 'yes'):
 		print('[INFO] Sorting inner files for earlier fake detection for %s' % NzbName)
 		sys.stdout.flush()
 		sort_inner_files()
