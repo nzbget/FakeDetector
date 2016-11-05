@@ -43,6 +43,17 @@
 # NOTE: This script requires Python to be installed on your system (tested
 # only with Python 2.x; may not work with Python 3.x).
 
+
+##############################################################################
+### OPTIONS                                                                ###
+
+# Banned extensions.
+#
+# Downloads which contain files with any of the following extensions will be marked as fake.
+# Extensions must be separated by a comma (eg: .wmv, .divx).
+#BannedExtensions=
+
+
 ### NZBGET QUEUE/POST-PROCESSING SCRIPT                                    ###
 ##############################################################################
 
@@ -64,6 +75,7 @@ POSTPROCESS_NONE=95
 POSTPROCESS_ERROR=94
 
 mediaExtensions = ['.mkv', '.avi', '.divx', '.xvid', '.mov', '.wmv', '.mp4', '.mpg', '.mpeg', '.vob', '.iso', '.m4v']
+bannedMediaExtensions = os.environ.get('NZBPO_BANNEDEXTENSIONS').replace(' ', '').split(',')
 
 verbose = False
 
@@ -85,7 +97,7 @@ def start_check():
 		if os.environ.get('NZBPR_PPSTATUS_FAKE') == 'yes':
 			# Print the message again during post-processing to add it into the post-processing log
 			# (which is then can be used by notification scripts such as EMail.py)
-			print('[WARNING] Download has media files and executables')
+			print('[WARNING] Download has media files and executables or contains a banned extension')
 		clean_up()
 		sys.exit(POSTPROCESS_SUCCESS)
 
@@ -104,6 +116,15 @@ def start_check():
 def contains_media(list):
 	for item in list:
 		if os.path.splitext(item)[1] in mediaExtensions:
+			return True
+		else:
+			continue
+	return False
+
+# Check if banned media files present in the list of files
+def contains_banned_media(list):
+	for item in list:
+		if os.path.splitext(item)[1] in bannedMediaExtensions:
 			return True
 		else:
 			continue
@@ -212,9 +233,9 @@ def detect_fake(name, dir):
 	filelist.extend(list_all_rars(dir))
 	for subdir in dirlist:
 		filelist.extend(list_all_rars(subdir))
-	fake = contains_media(filelist) and contains_executable(filelist)
+	fake = (contains_media(filelist) and contains_executable(filelist)) or contains_banned_media(filelist)
 	if fake:
-		print('[WARNING] Download has media files and executables')
+		print('[WARNING] Download has media files and executables or contains a banned extension')
 	return fake
 
 # Establish connection to NZBGet via RPC-API
