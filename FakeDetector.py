@@ -23,6 +23,7 @@
 
 ##############################################################################
 ### NZBGET QUEUE/POST-PROCESSING SCRIPT                                    ###
+### QUEUE EVENTS: NZB_ADDED, NZB_DOWNLOADED, FILE_DOWNLOADED
 
 # Detect nzbs with fake media files.
 #
