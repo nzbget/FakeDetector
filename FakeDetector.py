@@ -141,7 +141,15 @@ def contains_banned_media(list):
 def contains_executable(list):
 	exExtensions = [ '.exe', '.bat', '.sh' ]
 	allowNames = [ 'rename', 'Rename' ]
+	excludePath = [ r'reverse', r'spiegelen' ]
 	for item in list:
+		ep = False
+		for ap in excludePath:
+			if re.search(ap, item, re.I):
+				ep = True
+				break
+		if ep:
+			continue
 		name, ext = os.path.splitext(item)
 		if os.path.split(name)[1] != "":
 			name = os.path.split(name)[1]
